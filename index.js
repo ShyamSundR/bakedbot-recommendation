@@ -1,52 +1,55 @@
 const express = require('express');
-const app = express();
-const products = require('./data/products.json');
-const ingredients = require('./data/ingredients.json');
+const { spawn } = require('child_process');
 const cors = require('cors');
+
+const app = express();
 app.use(cors());
+app.use(express.json());
 
-app.use(express.json()); // Middleware to parse JSON requests
-
-// Start server on port 3000
-app.listen(3000, () => console.log('Backend running on http://localhost:3000'));
-
-
-//Recommendation
 app.get('/recommendations', (req, res) => {
-    const userPreferences = req.query.preferences ? req.query.preferences.split(',') : [];
-    
-    // Filter products based on user preferences (e.g., "relaxation")
-    const recommendedProducts = products.filter(product =>
-        userPreferences.some(pref => product.effects.includes(pref))
-    );
+  const preferences = req.query.preferences;
+  
+  const python = spawn('python', ['mlrag/get_recommendations.py', preferences]);
+  let dataString = '';
 
-    res.json(recommendedProducts);
+  python.stdout.on('data', (data) => {
+    dataString += data.toString();
+  });
+
+  python.on('close', (code) => {
+    console.log(`Python process exited with code ${code}`);
+    res.json(JSON.parse(dataString));
+  });
 });
 
-
-//Product info
 app.get('/product-info/:id', (req, res) => {
-    const productId = parseInt(req.params.id);
-    const product = products.find(p => p.id === productId);
+  const productId = req.params.id;
+  const query = `Tell me about product ${productId}`;
+  
+  const python = spawn('python', ['mlrag/get_response.py', query]);
+  let dataString = '';
 
-    if (!product) {
-        return res.status(404).send('Product not found');
-    }
+  python.stdout.on('data', (data) => {
+    dataString += data.toString();
+  });
 
-    // Augment product information with ingredient properties
-    const augmentedIngredients = product.ingredients.map(ingredientName => {
-        const ingredientDetails = ingredients.find(i => i.name === ingredientName);
-        return {
-            name: ingredientName,
-            properties: ingredientDetails ? ingredientDetails.properties : 'No details available'
-        };
-    });
+  python.on('close', (code) => {
+  console.log(`Python process exited with code ${code}`);
+  try {
+      if (dataString.trim() === '') {
+          throw new Error('Empty response from Python script');
+      }
+      const result = JSON.parse(dataString);
+      res.json(result);
+  } catch (e) {
+      console.error('Failed to parse:', dataString);
+      res.status(500).json({ 
+          error: 'AI processing failed',
+          details: e.message
+      });
+  }
+  });
+}); 
 
-    const augmentedProduct = {
-        ...product,
-        augmentedIngredients,
-    };
-
-    res.json(augmentedProduct);
-});
+app.listen(3000, () => console.log('Server running on port 3000'));
 
